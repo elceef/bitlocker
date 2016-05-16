@@ -26,7 +26,7 @@
 
 import os
 import volatility.plugins.common as common
-import volatility.utils as utils 
+import volatility.utils as utils
 import volatility.obj as obj
 import volatility.poolscan as poolscan
 import volatility.debug as debug
@@ -87,11 +87,11 @@ class bitlocker(common.AbstractWindowsCommand):
 
     def __init__(self, config, *args, **kwargs):
         common.AbstractWindowsCommand.__init__(self, config, *args, **kwargs)
-        config.add_option('DUMP-DIR', default = None, help = 'Directory in which to dump cipher ID + FVEK pair')
+        config.add_option('DUMP-DIR', default = None, help = 'Directory in which to dump FVEK')
 
     @staticmethod
     def is_valid_profile(profile):
-        return (profile.metadata.get('major', 0) == 6 and profile.metadata.get('minor', 0) in [0, 1])
+        return profile.metadata.get('major', 0) >= 6
 
     def rotate(self, word):
         return word[1:] + word[:1]
@@ -157,6 +157,8 @@ class bitlocker(common.AbstractWindowsCommand):
             pool_alignment = obj.VolMagic(pool.obj_vm).PoolAlignment.v()
             pool_size = int(pool.BlockSize * pool_alignment)
 
+            debug.debug('Scanning potential BitLocker pool @ {0:#010x}'.format(pool.obj_offset))
+
             aes = []
             buf = addr_space.zread(addr, pool_size)
 
@@ -167,6 +169,8 @@ class bitlocker(common.AbstractWindowsCommand):
             for i in range(8, pool_size - 240):
                 if self.validSchedule(buf[i:i+240], 32, 240):
                     aes.append(buf[i:i+32])
+
+            debug.debug('AES keys found: {}'.format(len(aes)))
 
             if 0 < len(aes) <= 2:
                 yield pool, aes[0], aes[1] if len(aes) > 1 else ''
