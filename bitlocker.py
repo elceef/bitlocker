@@ -159,7 +159,7 @@ class bitlocker(common.AbstractWindowsCommand):
 
         scanner = poolscan.SinglePoolScanner()
         scanner.checks = [
-          ('PoolTagCheck', dict(tag = 'FVEc')),
+          ('PoolTagCheck', dict(tag = pool_tag)),
           ('CheckPoolSize', dict(condition = lambda x: x > 184)),
         ]
 
