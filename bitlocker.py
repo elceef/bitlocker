@@ -1,10 +1,16 @@
-# Volatility plugin: bitlocker
+# Volatility Framework plugin: bitlocker
+#
 #
 # Author:
 # Marcin Ulikowski <marcin@ulikowski.pl>
 #
-# Based on the research by:
+#
+# Based on research by:
 # Jesse Kornblum <research@jessekornblum.com>
+#
+# AES key schedule crypto code dervied from SlowAES project:
+# https://code.google.com/p/slowaes/
+# Modified to verify a key schedule, not just compare them.
 #
 # Special thanks:
 # Piotr Chmylkowski <piotr.chmylkowski@gmail.com>
@@ -23,6 +29,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this plugin.  If not, see <http://www.gnu.org/licenses/>.
 
+"""
+@author:       Marcin Ulikowski
+@license:      GNU General Public License 2.0
+@contact:      marcin@ulikowski.pl
+@organization: http://ulikowski.pl
+"""
 
 import os
 import volatility.plugins.common as common
