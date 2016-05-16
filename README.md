@@ -1,76 +1,129 @@
-Volatility plugin: bitlocker
-============================
+Volatility Framework: bitlocker
+===============================
 
-This plugin finds and extracts BitLocker Full Volume Encryption Key (FVEK)
-which can be used to decrypt BitLocker volumes.
+This plugin finds and extracts Full Volume Encryption Key (FVEK) from memory dumps and/or hibernation files. This allows rapid unlocking of systems that had BitLocker encrypted volumes mounted at the time of acquisition.
 
-Currently only Windows Vista/7 memory images are supported.
+Supported memory images:
+- Windows 10 (*work in progress*)
+- Windows 8.1
+- Windows Server 2012 R2
+- Windows 8
+- Windows Server 2012
+- Windows 7
+- Windows Server 2008 R2
+- Windows Server 2008
+- Windows Vista
 
 
-Example use case
-----------------
+Example case - Windows 7 SP1 x64
+--------------------------------
 
-Evidence #1: John's computer HDD binary image: John_HDD.dd
+*Evidence: Raw HDD image*
 
-Evidence #2: John's computer memory dump: John_Win7SP1x64.raw
+**1) Determine partition layout and identify BitLocker volume**
 
-1) Determine the offset of encrypted BitLocker volume. In the following example
-it's the second NTFS partition starting from sector 718848. Note the "-FVE-FS-"
-signature.
+```console
+elceef@cerebellum:~$ fdisk -l john_win7_x64.dd
+Disk john_win7_x64.dd: 298.1 GiB, 320072933376 bytes, 625142448 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+Disklabel type: dos
+Disk identifier: 0x51c47769
 
+Device                    Boot     Start       End   Sectors   Size Id Type
+john_win7_x64.dd1 *         2048   1050623   1048576   512M  7 HPFS/NTFS/exFAT
+john_win7_x64.dd2        1050624 316475391 315424768 150.4G  7 HPFS/NTFS/exFAT
+john_win7_x64.dd3      316475392 625137663 308662272 147.2G  7 HPFS/NTFS/exFAT
 ```
-$ mmls John_HDD.dd
-DOS Partition Table
-Offset Sector: 0
-Units are in 512-byte sectors
 
-     Slot    Start        End          Length       Description
-00:  Meta    0000000000   0000000000   0000000001   Primary Table (#0)
-01:  -----   0000000000   0000002047   0000002048   Unallocated
-02:  00:00   0000002048   0000718847   0000716800   NTFS (0x07)
-03:  00:01   0000718848   0031455231   0030736384   NTFS (0x07)
-04:  -----   0031455232   0031457279   0000002048   Unallocated
-$
-$ hexdump -C -s $((718848*512)) -n 16 John_HDD.dd
-15f00000  eb 58 90 2d 46 56 45 2d  46 53 2d 00 02 08 00 00  |.X.-FVE-FS-.....|
-15f00010
+The last one starting from sector 316475392 is BitLocker protected. It can be verified by lookig at the filesystem header. Volumes encrypted with BitLocker will have a different signature than the standard NTFS header. A BitLocker encrypted volume starts with the "-FVE-FS-" signature.
+
+```console
+elceef@cerebellum:~$ hexdump -C -s $((512*316475392)) -n 16 john_win7_x64.dd
+25ba100000  eb 58 90 2d 46 56 45 2d  46 53 2d 00 02 08 00 00  |.X.-FVE-FS-.....|
 ```
 
-2) Use bitlocker plugin to extract FVEK. It's convenient to use optional
-argument *--dump-dir* in order to specify the directory in which cipher ID
-(first 2 bytes) and FVEK (64 bytes) will be saved.
+**2) Locate and convert hibernation file**
 
+Mount the system volume starting from sector 1050624 in read-only mode.
+
+```console
+elceef@cerebellum:~$ sudo mount -o loop,ro,offset=$((512*1050624)) john_win7_x64.dd /mnt/1
 ```
-$ export VOLATILITY_LOCATION=file://./John_Win7SP1x64.raw
-$ export VOLATILITY_PROFILE=Win7SP1x64
-$
-$ python vol.py bitlocker --dump-dir ./keys
+
+Convert hibernation file *hiberfil.sys* for further forensic analysis.
+
+```console
+elceef@cerebellum:~$ vol -f /mnt/1/hiberfil.sys --profile Win7SP1x64 imagecopy -O hiberfil.raw
+```
+
+**3) Use the bitlocker plugin to extract FVEK**
+
+The plugin scans the memory image for BitLocker cryptographic allocations (memory pools) and extracts AES keys (FVEK).
+
+```console
+elceef@cerebellum:~$ vol -f hiberfil.raw --profile Win7SP1x64 bitlocker
 Volatility Foundation Volatility Framework 2.5
 
-Cipher: AES-128 + Elephant diffuser (0x8000)
-FVEK: 2140c8afcbb835127b3b5b97fdcc8b846b7d97fba0c5a2e9dbfef97e263272fa4543af87702c4cee4252eaaa0b7fdc2a96c54aace6e90642a4bbece8afc430c2
-FVEK dumped to: ./keys/0xfa80018fe8c0.fvek
+Address : 0xfa8009958c10
+Cipher  : AES-256
+FVEK    : d5b6e71adb0c2e2d38dafdcedade8fc11e8be631b9fed5b2ba5b51ba32a57cd1
+TWEAK   : 49f9ecd5ddffcae44cde7f7a578b9a3ca5e79087826779e147de89423ebdf3f3
 
 ```
 
-3) Use extracted FVEK to decrypt the volume using dislocker in FUSE mode.
+**4) Decrypt and access the volume**
+
+Decrypt the volume on-the-fly using previously extracted FVEK.
+
+```console
+elceef@cerebellum:~$ sudo bdemount -k d5b6e71adb0c2e2d38dafdcedade8fc11e8be631b9fed5b2ba5b51ba32a57cd1:49f9ecd5ddffcae44cde7f7a578b9a3ca5e79087826779e147de89423ebdf3f3 -o $((512*316475392)) john_win7_x64.dd /crypt/1
+```
+
+Finally mount and access the filesystem.
+
+```console
+elceef@cerebellum:~$ sudo mount -o loop,ro /crypt/1/bde1 /mnt/2
+elceef@cerebellum:~$ ls /mnt/2
+CONFIDENTIAL
+```
+
+
+Example case - Windows 8.1 x86
+------------------------------
+
+*Evidence: Raw memory image*
+
+Windows 8 and newer versions use Cryptography API: Next Generation (CNG) which creates a lot of dynamically allocated memory pools. For this reason, the keys are often located in several places in the memory.
+
+```console
+elceef@cerebellum:~$ vol -f john_win81_x86.raw --profile Win81U1x86 bitlocker
+Volatility Foundation Volatility Framework 2.5
+
+Address : 0x872db068
+Cipher  : AES-128
+FVEK    : 48286dcd34d3ff215d705d68c5df4f08
+
+Address : 0x9ef55b08
+Cipher  : AES-128
+FVEK    : 48286dcd34d3ff215d705d68c5df4f08
+
+Address : 0xa4748b08
+Cipher  : AES-128
+FVEK    : 48286dcd34d3ff215d705d68c5df4f08
 
 ```
-$ sudo dislocker-fuse -V John_HDD.dd -k ./keys/0xfa80018fe8c0.fvek -o $((718848*512)) -- /mnt/ntfs
-$
-$ sudo mount -o loop,ro /mnt/ntfs/dislocker-file /mnt/clear
-$
-$ ls -lh /mnt/clear
-total 730M
-lrwxrwxrwx 2 root root   60 Jul 14  2009 Documents and Settings -> /mnt/clear/Users
--rwxrwxrwx 1 root root 730M Nov  4 09:39 pagefile.sys
-drwxrwxrwx 1 root root    0 Jul 13  2009 PerfLogs
-drwxrwxrwx 1 root root 4.0K Nov  4 09:58 ProgramData
-drwxrwxrwx 1 root root 4.0K Apr 12  2011 Program Files
-drwxrwxrwx 1 root root 4.0K Nov  4 07:01 Program Files (x86)
-drwxrwxrwx 1 root root    0 Nov  4 07:04 Recovery
-drwxrwxrwx 1 root root    0 Nov  4 09:57 $Recycle.Bin
-drwxrwxrwx 1 root root 4.0K Nov  4 07:05 System Volume Information
-drwxrwxrwx 1 root root 4.0K Nov  4 09:56 Users
-drwxrwxrwx 1 root root  24K Nov  4 09:58 Windows
-```
+
+
+Contact
+-------
+
+To send questions, comments or a chocolate, just drop an e-mail at
+[marcin@ulikowski.pl](mailto:marcin@ulikowski.pl)
+
+You can also reach me via:
+
+- Twitter: [@elceef](https://twitter.com/elceef)
+- LinkedIn: [Marcin Ulikowski](https://pl.linkedin.com/in/elceef)
+
